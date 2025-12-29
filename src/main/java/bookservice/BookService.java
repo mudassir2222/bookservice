@@ -1,20 +1,33 @@
 package bookservice;
+
 import java.util.*;
 import org.apache.commons.csv.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
-import java.nio.file.*;
 
 @Service
 public class BookService {
 
-    private static final String CSV_FILE = "src/main/resources/Book1.csv";
-    private static final String EXCEL_FILE = "src/main/resources/books_output.xlsx";
+    // CSV is READ-ONLY and must be loaded from classpath
+    private static final String CSV_FILE = "Book1.csv";
 
+    // Excel must be written to filesystem (WAR is read-only)
+    private static final String EXCEL_FILE = "/opt/bookservice/books_output.xlsx";
+
+    // ---------------- GET SINGLE BOOK ----------------
     public Book getBook(int id) throws Exception {
-        Reader reader = Files.newBufferedReader(Paths.get(CSV_FILE));
+
+        InputStream is = getClass()
+                .getClassLoader()
+                .getResourceAsStream(CSV_FILE);
+
+        if (is == null) {
+            throw new RuntimeException("Book1.csv not found in classpath");
+        }
+
+        Reader reader = new BufferedReader(new InputStreamReader(is));
         Iterable<CSVRecord> records =
                 CSVFormat.DEFAULT.withFirstRecordAsHeader().parse(reader);
 
@@ -28,12 +41,31 @@ public class BookService {
                 return book;
             }
         }
+
         throw new RuntimeException("Book not found");
     }
 
+    // ---------------- SAVE BOOK TO EXCEL ----------------
     public void saveBook(Book book) throws Exception {
-        XSSFWorkbook workbook =
-                new XSSFWorkbook(new FileInputStream(EXCEL_FILE));
+
+        File excelFile = new File(EXCEL_FILE);
+
+        XSSFWorkbook workbook;
+        if (excelFile.exists()) {
+            workbook = new XSSFWorkbook(new FileInputStream(excelFile));
+        } else {
+            workbook = new XSSFWorkbook();
+            workbook.createSheet("Books");
+            workbook.getSheetAt(0).createRow(0)
+                    .createCell(0).setCellValue("id");
+            workbook.getSheetAt(0).getRow(0)
+                    .createCell(1).setCellValue("title");
+            workbook.getSheetAt(0).getRow(0)
+                    .createCell(2).setCellValue("author");
+            workbook.getSheetAt(0).getRow(0)
+                    .createCell(3).setCellValue("price");
+        }
+
         var sheet = workbook.getSheetAt(0);
         var row = sheet.createRow(sheet.getLastRowNum() + 1);
 
@@ -42,16 +74,27 @@ public class BookService {
         row.createCell(2).setCellValue(book.author);
         row.createCell(3).setCellValue(book.price);
 
-        workbook.write(new FileOutputStream(EXCEL_FILE));
+        try (FileOutputStream fos = new FileOutputStream(excelFile)) {
+            workbook.write(fos);
+        }
+
         workbook.close();
     }
-    
-    
+
+    // ---------------- GET ALL BOOKS ----------------
     public List<Book> getAllBooks() throws Exception {
 
         List<Book> books = new ArrayList<>();
 
-        Reader reader = Files.newBufferedReader(Paths.get(CSV_FILE));
+        InputStream is = getClass()
+                .getClassLoader()
+                .getResourceAsStream(CSV_FILE);
+
+        if (is == null) {
+            throw new RuntimeException("Book1.csv not found in classpath");
+        }
+
+        Reader reader = new BufferedReader(new InputStreamReader(is));
         Iterable<CSVRecord> records =
                 CSVFormat.DEFAULT.withFirstRecordAsHeader().parse(reader);
 
@@ -67,3 +110,4 @@ public class BookService {
         return books;
     }
 }
+

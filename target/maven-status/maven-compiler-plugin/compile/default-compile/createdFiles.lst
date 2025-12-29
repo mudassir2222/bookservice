@@ -1,4 +1,4 @@
-bookservice\Book.class
-bookservice\BookServiceApplication.class
-bookservice\BookService.class
-bookservice\BookController.class
+bookservice/Book.class
+bookservice/BookController.class
+bookservice/BookServiceApplication.class
+bookservice/BookService.class
