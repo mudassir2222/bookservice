@@ -1,0 +1,156 @@
+name: CICD Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Select Environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+  repository_dispatch:
+    types: [jira-trigger]
+
+env:
+  IMAGE_NAME: onlinebookstore
+  ECR_REPOSITORY: gitactionrepo
+  IMAGE_TAG: ${{ github.run_number }}
+  LOG_DIR: /home/github/actions-runner/_work/ci-logs
+  CI_LOG: /home/github/actions-runner/_work/ci-logs/${{ github.run_number }}.log
+
+jobs:
+  cicd:
+    name: CICD - JOBS
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+
+      # ------------------------
+      # BUILD
+      # ------------------------
+      - name: Maven Build
+        run: |
+          mvn clean package -DskipTests | tee -a $CI_LOG 
+
+      # ------------------------
+      # TEST
+      # ------------------------
+      - name: Maven Test
+        run: |
+          mvn test | tee -a $CI_LOG
+
+      # ------------------------
+      # SBOM
+      # ------------------------
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          mvn org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom | tee -a $CI_LOG
+          cp target/bom.xml $LOG_DIR/sbom.xml
+
+      # ------------------------
+      # SONAR SCAN
+      # ------------------------
+      - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          mvn sonar:sonar \
+            -Dsonar.projectKey=OnlineBookStore-${{ inputs.env }} \
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
+            -Dsonar.login=$SONAR_TOKEN \
+            -Dsonar.qualitygate.wait=true | tee -a $CI_LOG
+
+      # ------------------------
+      # DOCKER BUILD
+      # ------------------------
+      - name: Docker Build
+        run: |
+          docker build -t $IMAGE_NAME:$IMAGE_TAG . | tee -a $CI_LOG
+
+      # ------------------------
+      # TRIVY SCAN
+      # ------------------------
+      - name: Trivy Image Scan
+        run: |
+          trivy image --exit-code 1 --severity HIGH,CRITICAL $IMAGE_NAME:$IMAGE_TAG | tee -a $CI_LOG || true
+
+
+      # ------------------------
+      # AWS CONFIG
+      # ------------------------
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ------------------------
+      # PUSH IMAGE
+      # ------------------------
+      - name: Push Image to ECR
+        run: |
+          ECR_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${ECR_REPOSITORY}
+          docker tag $IMAGE_NAME:$IMAGE_TAG $ECR_URI:$IMAGE_TAG
+          docker push $ECR_URI:$IMAGE_TAG | tee -a $CI_LOG
+
+      # ------------------------
+      # DEPLOY
+      # ------------------------
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster gitaction-cluster \
+            --service gitaction-onlinebookstore-task-service \
+            --force-new-deployment | tee -a $CI_LOG
+
+      # ------------------------
+      # ARCHIVE LOGS
+      # ------------------------
+      - name: Upload CI Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: /home/github/actions-runner/_work/ci-logs
+
+      # ------------------------
+      # JIRA
+      # ------------------------
+      - name: Notify Jira of success
+        if: success()
+        uses: atlassian/gajira-login@v3
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+
+      - name: Transition Jira Issue to Done
+        uses: atlassian/gajira-transition@v3
+        with:
+          issue: ${{ github.event.client_payload.jira_key }}
+          transition: Done
+
+
+          
+
+
+          
+
+
+          
+
+          
